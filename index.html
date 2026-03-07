@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NSGA-II vs GA 演化性能对比分析</title>
+    <!-- 引入 Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 引入 React 和 Babel -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+    <style>
+        body {
+            background-color: black;
+            margin: 0;
+            overflow-x: hidden;
+            color: white;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
+        /* 针对移动端的滑块样式优化 */
+        input[type=range] {
+            -webkit-appearance: none;
+            background: rgba(255, 255, 255, 0.2);
+        }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 14px;
+            width: 14px;
+            border-radius: 50%;
+            background: white;
+            cursor: pointer;
+            box-shadow: 0 0 10px rgba(255,255,255,0.5);
+        }
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: rgba(255,255,255,0.1);
+            border-radius: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useMemo, useCallback } = React;
+
+        // --- 修复图标组件 (直接使用内联 SVG 确保无报错) ---
+        const IconPlay = ({ size = 24, className = "" }) => (
+            <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                <polygon points="5 3 19 12 5 21 5 3"></polygon>
+            </svg>
+        );
+
+        const IconPause = ({ size = 24, className = "" }) => (
+            <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                <rect x="6" y="4" width="4" height="16"></rect>
+                <rect x="14" y="4" width="4" height="16"></rect>
+            </svg>
+        );
+
+        const IconRotate = ({ size = 24, className = "" }) => (
+            <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path>
+                <path d="M3 3v5h5"></path>
+            </svg>
+        );
+
+        const IconCalc = ({ size = 24, className = "" }) => (
+            <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                <rect x="4" y="2" width="16" height="20" rx="2"></rect>
+                <line x1="8" y1="6" x2="16" y2="6"></line>
+                <line x1="16" y1="14" x2="16" y2="18"></line>
+                <path d="M16 10h.01"></path>
+                <path d="M12 10h.01"></path>
+                <path d="M8 10h.01"></path>
+                <path d="M12 14h.01"></path>
+                <path d="M8 14h.01"></path>
+                <path d="M12 18h.01"></path>
+                <path d="M8 18h.01"></path>
+            </svg>
+        );
+
+        const IconSettings = ({ size = 24, className = "" }) => (
+            <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                <path d="M20 7h-9"></path>
+                <path d="M14 17H5"></path>
+                <circle cx="17" cy="17" r="3"></circle>
+                <circle cx="7" cy="7" r="3"></circle>
+            </svg>
+        );
+
+        // --- 核心数学与算法逻辑 ---
+        const NUM_VARS = 2; 
+        const POP_SIZE = 80;
+
+        const evaluateMath = (vars) => {
+            const x = vars[0];
+            const y = vars[1];
+            const f1 = x * x + y * y;
+            const f2 = (x - 2) * (x - 2) + (y - 2) * (y - 2);
+            return [f1, f2];
+        };
+
+        const trueParetoFront = Array.from({ length: 100 }, (_, i) => {
+            const t = (i / 99) * 2; 
+            return [2 * t * t, 2 * (2 - t) * (2 - t)];
+        });
+
+        const mutate = (vars) => vars.map(v => {
+            if (Math.random() < 1 / NUM_VARS) {
+                const delta = (Math.random() - 0.5) * 4; 
+                return Math.max(-5, Math.min(5, v + delta)); 
+            }
+            return v;
+        });
+
+        const crossover = (p1, p2) => {
+            const alpha = Math.random();
+            let c1 = [], c2 = [];
+            for (let i = 0; i < NUM_VARS; i++) {
+                c1.push(alpha * p1.x[i] + (1 - alpha) * p2.x[i]);
+                c2.push((1 - alpha) * p1.x[i] + alpha * p2.x[i]);
+            }
+            return [mutate(c1), mutate(c2)];
+        };
+
+        const dominates = (p1, p2) => {
+            let better = false;
+            for (let i = 0; i < 2; i++) {
+                if (p1.obj[i] > p2.obj[i]) return false;
+                if (p1.obj[i] < p2.obj[i]) better = true;
+            }
+            return better;
+        };
+
+        const fastNonDominatedSort = (pop) => {
+            const fronts = [[]];
+            pop.forEach(p => { p.domCount = 0; p.domSet = []; });
+            for (let i = 0; i < pop.length; i++) {
+                for (let j = 0; j < pop.length; j++) {
+                    if (i === j) continue;
+                    if (dominates(pop[i], pop[j])) pop[i].domSet.push(j);
+                    else if (dominates(pop[j], pop[i])) pop[i].domCount++;
+                }
+                if (pop[i].domCount === 0) { pop[i].rank = 0; fronts[0].push(i); }
+            }
+            let i = 0;
+            while (fronts[i] && fronts[i].length > 0) {
+                const next = [];
+                fronts[i].forEach(pIdx => {
+                    pop[pIdx].domSet.forEach(qIdx => {
+                        pop[qIdx].domCount--;
+                        if (pop[qIdx].domCount === 0) { pop[qIdx].rank = i + 1; next.push(qIdx); }
+                    });
+                });
+                i++;
+                if (next.length > 0) fronts.push(next);
+            }
+            return fronts;
+        };
+
+        const calcCrowding = (pop, front) => {
+            const l = front.length;
+            if (l === 0) return;
+            front.forEach(idx => pop[idx].distance = 0);
+            for (let m = 0; m < 2; m++) {
+                front.sort((a, b) => pop[a].obj[m] - pop[b].obj[m]);
+                pop[front[0]].distance = Infinity;
+                pop[front[l - 1]].distance = Infinity;
+                const range = pop[front[l - 1]].obj[m] - pop[front[0]].obj[m] || 1;
+                for (let i = 1; i < l - 1; i++) {
+                    pop[front[i]].distance += (pop[front[i + 1]].obj[m] - pop[front[i - 1]].obj[m]) / range;
+                }
+            }
+        };
+
+        const evolveNSGA2 = (pop) => {
+            const offspring = [];
+            while (offspring.length < POP_SIZE) {
+                const tSelect = () => {
+                    const a = pop[Math.floor(Math.random() * pop.length)];
+                    const b = pop[Math.floor(Math.random() * pop.length)];
+                    if (a.rank < b.rank) return a;
+                    if (a.rank > b.rank) return b;
+                    return a.distance > b.distance ? a : b;
+                };
+                const [c1, c2] = crossover(tSelect(), tSelect());
+                offspring.push({ x: c1, obj: evaluateMath(c1) }, { x: c2, obj: evaluateMath(c2) });
+            }
+            const combined = [...pop, ...offspring];
+            const fronts = fastNonDominatedSort(combined);
+            const nextPop = [];
+            let fIdx = 0;
+            while (fIdx < fronts.length && nextPop.length + fronts[fIdx].length <= POP_SIZE) {
+                calcCrowding(combined, fronts[fIdx]);
+                fronts[fIdx].forEach(i => nextPop.push(combined[i]));
+                fIdx++;
+            }
+            if (fIdx < fronts.length && nextPop.length < POP_SIZE) {
+                calcCrowding(combined, fronts[fIdx]);
+                fronts[fIdx].sort((a, b) => combined[b].distance - combined[a].distance);
+                const remain = POP_SIZE - nextPop.length;
+                for (let i = 0; i < remain; i++) nextPop.push(combined[fronts[fIdx][i]]);
+            }
+            const finalFronts = fastNonDominatedSort(nextPop);
+            calcCrowding(nextPop, finalFronts[0]);
+            return nextPop;
+        };
+
+        const evolveSGA = (pop, w1) => {
+            const w2 = 1 - w1;
+            const getFitness = (p) => w1 * p.obj[0] + w2 * p.obj[1];
+            const offspring = [];
+            while (offspring.length < POP_SIZE) {
+                const tSelect = () => {
+                    const a = pop[Math.floor(Math.random() * pop.length)];
+                    const b = pop[Math.floor(Math.random() * pop.length)];
+                    return getFitness(a) < getFitness(b) ? a : b;
+                };
+                const [c1, c2] = crossover(tSelect(), tSelect());
+                offspring.push({ x: c1, obj: evaluateMath(c1) }, { x: c2, obj: evaluateMath(c2) });
+            }
+            const combined = [...pop, ...offspring];
+            combined.sort((a, b) => getFitness(a) - getFitness(b));
+            return combined.slice(0, POP_SIZE);
+        };
+
+        // --- 主 App 组件 ---
+        function App() {
+            const [generation, setGeneration] = useState(0);
+            const [isPlaying, setIsPlaying] = useState(false);
+            const [speed, setSpeed] = useState(100);
+            const [popNSGA2, setPopNSGA2] = useState([]);
+            const [popSGA, setPopSGA] = useState([]);
+            const [sgaWeight1, setSgaWeight1] = useState(0.5);
+
+            const timerRef = useRef(null);
+
+            const initPops = useCallback(() => {
+                setIsPlaying(false);
+                const initialPop = Array.from({ length: POP_SIZE }, () => {
+                    const x = Array.from({ length: NUM_VARS }, () => (Math.random() - 0.5) * 10);
+                    return { x, obj: evaluateMath(x) };
+                });
+                const initialNSGA2 = initialPop.map(p => ({...p}));
+                const fronts = fastNonDominatedSort(initialNSGA2);
+                if(fronts[0]) calcCrowding(initialNSGA2, fronts[0]);
+                setPopNSGA2(initialNSGA2);
+                const initialSGA = initialPop.map(p => ({...p}));
+                setPopSGA(initialSGA);
+                setGeneration(0);
+            }, []);
+
+            useEffect(() => { initPops(); }, [initPops]);
+
+            const step = useCallback(() => {
+                setGeneration(g => g + 1);
+                setPopNSGA2(prev => evolveNSGA2(prev));
+                setPopSGA(prev => evolveSGA(prev, sgaWeight1));
+            }, [sgaWeight1]);
+
+            useEffect(() => {
+                if (isPlaying) timerRef.current = setInterval(step, speed);
+                else clearInterval(timerRef.current);
+                return () => clearInterval(timerRef.current);
+            }, [isPlaying, step, speed]);
+
+            const bounds = useMemo(() => {
+                let maxX = 8, maxY = 8; 
+                [...popNSGA2, ...popSGA].forEach(p => {
+                    if (p.obj && p.obj[0] > maxX) maxX = p.obj[0];
+                    if (p.obj && p.obj[1] > maxY) maxY = p.obj[1];
+                });
+                return { minX: -0.5, maxX: maxX * 1.05, minY: -0.5, maxY: maxY * 1.05 };
+            }, [popNSGA2, popSGA]);
+
+            const mapX = (x) => ((x - bounds.minX) / (bounds.maxX - bounds.minX)) * 100;
+            const mapY = (y) => 100 - ((y - bounds.minY) / (bounds.maxY - bounds.minY)) * 100;
+
+            const dx = sgaWeight1 * 25;
+            const dy = (1 - sgaWeight1) * 25;
+
+            return (
+                <div className="flex flex-col min-h-screen bg-black text-white font-sans p-4 lg:p-6 overflow-x-hidden gap-6 tracking-wide custom-scrollbar">
+                    <header className="flex flex-wrap justify-between items-center border-b border-white/10 pb-5 shrink-0">
+                        <div>
+                            <h1 className="text-xl lg:text-2xl font-normal tracking-tight flex items-center gap-3">
+                                <IconCalc size={28} className="text-white"/>
+                                NSGA-II <span className="text-white/30 font-light mx-2">|</span> GA
+                                <span className="hidden sm:inline text-sm text-white/70 font-light ml-2 tracking-widest uppercase">演化性能对比分析</span>
+                            </h1>
+                        </div>
+                        <div className="flex items-center gap-4 lg:gap-6 mt-4 lg:mt-0">
+                            <div className="flex flex-col gap-1.5">
+                                <div className="flex justify-between items-center w-24 lg:w-32 text-[10px] text-white/70 uppercase font-medium tracking-widest">
+                                    <span>间隔</span>
+                                    <span className="text-white">{speed}ms</span>
+                                </div>
+                                <input type="range" min="20" max="500" step="10" value={speed} onChange={(e) => setSpeed(parseInt(e.target.value))} className="w-24 lg:w-32 h-0.5 bg-white/20 rounded-full appearance-none cursor-pointer accent-white" />
+                            </div>
+                            <div className="w-px h-8 bg-white/10 mx-2"></div>
+                            <div className="flex flex-col items-end w-16 lg:w-20">
+                                <span className="text-[10px] text-white/70 uppercase font-medium tracking-widest mb-0.5">代数</span>
+                                <span className="text-xl lg:text-2xl font-mono font-light leading-none text-white">{generation}</span>
+                            </div>
+                            <div className="flex gap-3 ml-2">
+                                <button onClick={initPops} className="w-10 h-10 flex items-center justify-center rounded-full bg-[#111] border border-white/10 text-white hover:bg-white/10 transition-colors" title="重置"><IconRotate size={18} /></button>
+                                <button onClick={() => setIsPlaying(!isPlaying)} className={`px-4 lg:px-6 py-2 rounded-full font-medium text-sm transition-all flex items-center gap-2 ${isPlaying ? 'bg-[#111] text-white border border-white/20' : 'bg-white text-black'}`}>
+                                    {isPlaying ? <><IconPause size={18} /> 暂停</> : <><IconPlay size={18} /> 运行</>}
+                                </button>
+                            </div>
+                        </div>
+                    </header>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-sm shrink-0">
+                        <div className="bg-[#0A0A0A] p-5 rounded-2xl border border-white/5 flex flex-col justify-center gap-2 shadow-xl">
+                            <div className="text-xs text-white/60 uppercase tracking-widest font-medium mb-1">底层数学优化模型</div>
+                            <div className="flex items-baseline gap-4">
+                                <span className="text-white/90">目标 1:</span>
+                                <span className="font-mono text-lg font-light text-white">min <span className="text-[#00e5ff] font-semibold">f₁(x,y)</span> = x² + y²</span>
+                            </div>
+                            <div className="flex items-baseline gap-4">
+                                <span className="text-white/90">目标 2:</span>
+                                <span className="font-mono text-lg font-light text-white">min <span className="text-[#ff9100] font-semibold">f₂(x,y)</span> = (x-2)² + (y-2)²</span>
+                            </div>
+                        </div>
+                        <div className="bg-[#0A0A0A] p-5 rounded-2xl border border-white/5 flex flex-col justify-center relative overflow-hidden shadow-xl">
+                            <div className="flex justify-between items-center mb-4 relative z-10">
+                                <div className="text-xs text-white/60 uppercase tracking-widest font-medium flex items-center gap-2"><IconSettings size={16}/> GA 算法偏好配置</div>
+                                <div className="font-mono text-xs">w₁: <span className="text-white">{(sgaWeight1).toFixed(2)}</span> / w₂: <span className="text-white">{(1-sgaWeight1).toFixed(2)}</span></div>
+                            </div>
+                            <div className="flex items-center gap-4 relative z-10">
+                                <span className="text-xs text-white/70 w-16 text-right">偏向 f₂</span>
+                                <input type="range" min="0" max="1" step="0.05" value={sgaWeight1} onChange={(e) => setSgaWeight1(parseFloat(e.target.value))} className="flex-1 h-0.5 bg-white/20 rounded-full appearance-none cursor-pointer accent-[#ff9100]" />
+                                <span className="text-xs text-white/70 w-16">偏向 f₁</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <main className="flex-1 grid grid-cols-1 lg:grid-cols-2 gap-6 min-h-[450px] mb-6">
+                        {/* NSGA-II 视图 */}
+                        <div className="bg-[#050505] rounded-3xl border border-white/5 flex flex-col relative overflow-hidden shadow-2xl">
+                            <div className="absolute top-6 left-6 z-10">
+                                <h2 className="text-lg font-light tracking-wide flex items-center gap-3"><div className="w-2 h-2 rounded-full bg-[#00e5ff] shadow-[0_0_8px_#00e5ff]"></div>NSGA-II</h2>
+                                <p className="text-xs text-white/60 mt-1 font-mono uppercase tracking-widest">多目标直接寻优</p>
+                            </div>
+                            <div className="flex-1 relative mt-20 flex justify-center items-center pb-4">
+                                <svg className="w-full h-full max-h-[55vh] overflow-visible p-2" viewBox="-30 -20 160 160" preserveAspectRatio="xMidYMid meet">
+                                    {[0, 25, 50, 75, 100].map(v => (
+                                        <React.Fragment key={`grid-l-${v}`}>
+                                            <line x1={v} y1="0" x2={v} y2="100" stroke="rgba(255,255,255,0.1)" strokeWidth="0.5" />
+                                            <line x1="0" y1={v} x2="100" y2={v} stroke="rgba(255,255,255,0.1)" strokeWidth="0.5" />
+                                            <text x={v} y="112" fill="rgba(255,255,255,0.5)" fontSize="5" textAnchor="middle" className="font-mono">{((bounds.minX + (v/100)*(bounds.maxX-bounds.minX))).toFixed(1)}</text>
+                                            <text x="-8" y={v} fill="rgba(255,255,255,0.5)" fontSize="5" textAnchor="end" alignmentBaseline="middle" className="font-mono">{((bounds.maxY - (v/100)*(bounds.maxY-bounds.minY))).toFixed(1)}</text>
+                                        </React.Fragment>
+                                    ))}
+                                    <path d={`M ${trueParetoFront.map(p => `${mapX(p[0])},${mapY(p[1])}`).join(' L ')}`} fill="none" stroke="rgba(255,255,255,0.3)" strokeWidth="1" strokeDasharray="2,3" />
+                                    {popNSGA2.map((p, i) => (
+                                        <g key={`nsga-${i}`} className="transition-all duration-300">
+                                            {p.rank === 0 && <circle cx={mapX(p.obj[0])} cy={mapY(p.obj[1])} r="3" fill="rgba(0,229,255,0.2)" className="animate-pulse" />}
+                                            <circle cx={mapX(p.obj[0])} cy={mapY(p.obj[1])} r={p.rank === 0 ? "1.5" : "1.0"} fill={p.rank === 0 ? "#00e5ff" : "rgba(0,229,255,0.3)"} />
+                                        </g>
+                                    ))}
+                                    <text x="50" y="128" fill="rgba(255,255,255,0.8)" fontSize="6" textAnchor="middle" className="font-semibold uppercase tracking-widest">f₁ 极小化值</text>
+                                    <text x="-24" y="50" fill="rgba(255,255,255,0.8)" fontSize="6" textAnchor="middle" transform="rotate(-90, -24, 50)" className="font-semibold uppercase tracking-widest">f₂ 极小化值</text>
+                                </svg>
+                            </div>
+                            <div className="px-6 py-4 border-t border-white/5 bg-[#0A0A0A] flex justify-between items-center text-xs text-white/50 font-light shrink-0">
+                                <span>机制: 非支配排序 + 拥挤度距离</span>
+                                <span className="text-[#00e5ff] font-mono">找到 {popNSGA2.filter(p=>p.rank===0).length} 个精英解</span>
+                            </div>
+                        </div>
+
+                        {/* GA 视图 */}
+                        <div className="bg-[#050505] rounded-3xl border border-white/5 flex flex-col relative overflow-hidden shadow-2xl">
+                            <div className="absolute top-6 left-6 z-10">
+                                <h2 className="text-lg font-light tracking-wide flex items-center gap-3"><div className="w-2 h-2 rounded-full bg-[#ff9100] shadow-[0_0_8px_#ff9100]"></div>标准 GA</h2>
+                                <p className="text-xs text-white/60 mt-1 font-mono uppercase tracking-widest">单目标化降维</p>
+                            </div>
+                            <div className="flex-1 relative mt-20 flex justify-center items-center pb-4">
+                                <svg className="w-full h-full max-h-[55vh] overflow-visible p-2" viewBox="-30 -20 160 160" preserveAspectRatio="xMidYMid meet">
+                                    {[0, 25, 50, 75, 100].map(v => (
+                                        <React.Fragment key={`grid-r-${v}`}>
+                                            <line x1={v} y1="0" x2={v} y2="100" stroke="rgba(255,255,255,0.1)" strokeWidth="0.5" />
+                                            <line x1="0" y1={v} x2="100" y2={v} stroke="rgba(255,255,255,0.1)" strokeWidth="0.5" />
+                                            <text x={v} y="112" fill="rgba(255,255,255,0.5)" fontSize="5" textAnchor="middle" className="font-mono">{((bounds.minX + (v/100)*(bounds.maxX-bounds.minX))).toFixed(1)}</text>
+                                            <text x="-8" y={v} fill="rgba(255,255,255,0.5)" fontSize="5" textAnchor="end" alignmentBaseline="middle" className="font-mono">{((bounds.maxY - (v/100)*(bounds.maxY-bounds.minY))).toFixed(1)}</text>
+                                        </React.Fragment>
+                                    ))}
+                                    <path d={`M ${trueParetoFront.map(p => `${mapX(p[0])},${mapY(p[1])}`).join(' L ')}`} fill="none" stroke="rgba(255,255,255,0.3)" strokeWidth="1" strokeDasharray="2,3" />
+                                    {generation > 0 && popSGA.length > 0 && (
+                                        <g className="transition-all duration-300" style={{ transform: `translate(${mapX(popSGA[0].obj[0])}px, ${mapY(popSGA[0].obj[1])}px)` }}>
+                                            <line x1="0" y1="0" x2={-dx} y2={dy} stroke="rgba(255,145,0,0.4)" strokeWidth="0.6" strokeDasharray="2,2" />
+                                            <text x={-dx} y={dy + 6} fill="#ff9100" fontSize="5" textAnchor="middle" className="font-bold">公式牵引力</text>
+                                        </g>
+                                    )}
+                                    {popSGA.map((p, i) => (
+                                        <circle key={`sga-${i}`} cx={mapX(p.obj[0])} cy={mapY(p.obj[1])} r={i < 5 ? "1.8" : "1.0"} fill={i < 5 ? "#ff9100" : "rgba(255,145,0,0.3)"} className="transition-all duration-300" />
+                                    ))}
+                                    <text x="50" y="128" fill="rgba(255,255,255,0.8)" fontSize="6" textAnchor="middle" className="font-semibold uppercase tracking-widest">f₁ 极小化值</text>
+                                    <text x="-24" y="50" fill="rgba(255,255,255,0.8)" fontSize="6" textAnchor="middle" transform="rotate(-90, -24, 50)" className="font-semibold uppercase tracking-widest">f₂ 极小化值</text>
+                                </svg>
+                            </div>
+                            <div className="px-6 py-4 border-t border-white/5 bg-[#0A0A0A] flex justify-between items-center text-xs text-white/50 font-light shrink-0">
+                                <span>机制: 极小化 F = w₁f₁ + w₂f₂</span>
+                                <span className="text-[#ff9100] font-mono tracking-tighter">陷入单一极值点</span>
+                            </div>
+                        </div>
+                    </main>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
