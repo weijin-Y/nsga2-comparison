@@ -33,6 +33,13 @@
             -webkit-font-smoothing: antialiased;
             overflow-x: hidden;
             line-height: 1.5;
+            /* 添加科技感背景图（极淡纹理） */
+            background-image: linear-gradient(rgba(0,0,0,0.92), rgba(0,0,0,0.92)), 
+                              url('https://images.unsplash.com/photo-1451187580459-43490279c0fa?auto=format&fit=crop&w=2000&q=80');
+            background-size: cover;
+            background-attachment: fixed;
+            background-position: center;
+            background-repeat: no-repeat;
         }
 
         /* 自定义滚动条 (极细) */
@@ -420,7 +427,6 @@
 
     <!-- 主内容区域 (动态切换) -->
     <div class="main-content" id="mainContent">
-        <!-- 内容由JS渲染，但先放置一个占位符 -->
         <div class="container" id="dynamicContent"></div>
     </div>
 
